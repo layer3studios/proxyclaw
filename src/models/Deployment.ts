@@ -1,0 +1,186 @@
+import mongoose, { Schema, model, Model } from 'mongoose';
+import {
+  IDeploymentDocument,
+  IDecryptedSecrets,
+  DeploymentStatus
+} from '../types';
+import { cryptoService } from '@utils/crypto';
+import { logger } from '@utils/logger';
+
+const ENCRYPTED_FIELDS = ['openaiApiKey', 'anthropicApiKey', 'googleApiKey', 'telegramBotToken', 'webUiToken'];
+
+const DeploymentSchema = new Schema<IDeploymentDocument>(
+  {
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    subdomain: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      validate: /^[a-z0-9][a-z0-9-_]*[a-z0-9]$/
+    },
+    containerId: { type: String, sparse: true },
+    internalPort: { type: Number, sparse: true },
+    status: {
+      type: String,
+      enum: ['idle', 'configuring', 'provisioning', 'starting', 'healthy', 'stopped', 'error', 'restarting'],
+      default: 'idle'
+    },
+    secrets: {
+      openaiApiKey: { type: String },
+      anthropicApiKey: { type: String },
+      telegramBotToken: { type: String },
+      googleApiKey: { type: String },
+      webUiToken: { type: String, select: false, required: false },
+    },
+    config: {
+      model: { type: String, required: true },
+      systemPrompt: { type: String, default: 'You are a helpful AI assistant.' }
+    },
+    lastHeartbeat: { type: Date },
+    lastRequestAt: { type: Date },        // <-- Tracks last proxy traffic for idle auto-stop
+    errorMessage: { type: String },
+    provisioningStep: { type: String, default: '' },
+  },
+  {
+    timestamps: true,
+    toJSON: {
+      virtuals: true,
+      transform: (doc, ret: any) => {
+        delete ret.secrets;
+        delete ret.__v;
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (doc, ret: any) => {
+        delete ret.secrets;
+        delete ret.__v;
+        return ret;
+      },
+    },
+  }
+);
+
+DeploymentSchema.virtual('url').get(function () {
+  return this.getUrl();
+});
+
+function isEncryptedFormat(value: string): boolean {
+  if (!value || typeof value !== 'string') return false;
+  const parts = value.split(':');
+  return parts.length === 3 && parts.every(p => /^[0-9a-fA-F]+$/.test(p));
+}
+
+DeploymentSchema.methods.decryptSecrets = async function (): Promise<IDecryptedSecrets> {
+  const decrypted: IDecryptedSecrets = { webUiToken: '' };
+
+  const safeDecrypt = (field: string, value?: string) => {
+    if (!value) return undefined;
+
+    if (!isEncryptedFormat(value)) {
+      logger.warn(`Detecting plaintext secret for ${field} (Fixing automatically on next save)`, { id: this._id });
+      return value;
+    }
+
+    try {
+      return cryptoService.decrypt(value);
+    } catch (error) {
+      logger.error(`Failed to decrypt field ${field}`, { id: this._id, error: (error as Error).message });
+      throw error;
+    }
+  };
+
+  try {
+    if (this.secrets.webUiToken) decrypted.webUiToken = safeDecrypt('webUiToken', this.secrets.webUiToken) || '';
+    if (this.secrets.openaiApiKey) decrypted.openaiApiKey = safeDecrypt('openaiApiKey', this.secrets.openaiApiKey);
+    if (this.secrets.anthropicApiKey) decrypted.anthropicApiKey = safeDecrypt('anthropicApiKey', this.secrets.anthropicApiKey);
+    if (this.secrets.telegramBotToken) decrypted.telegramBotToken = safeDecrypt('telegramBotToken', this.secrets.telegramBotToken);
+    if (this.secrets.googleApiKey) decrypted.googleApiKey = safeDecrypt('googleApiKey', this.secrets.googleApiKey);
+  } catch (error) {
+    throw new Error(`Decryption failed: ${(error as Error).message}`);
+  }
+  return decrypted;
+};
+
+DeploymentSchema.pre('save', async function (next) {
+  if (!this.isModified('secrets')) return next();
+  try {
+    const secrets: any = this.secrets;
+    for (const field of ENCRYPTED_FIELDS) {
+      const value = secrets[field];
+      if (value && !isEncryptedFormat(value)) {
+        secrets[field] = cryptoService.encrypt(value);
+      }
+    }
+    next();
+  } catch (err) { next(err as Error); }
+});
+
+const VALID_STATE_TRANSITIONS: Record<DeploymentStatus, DeploymentStatus[]> = {
+  idle: ['idle', 'configuring', 'provisioning', 'error'],
+  configuring: ['configuring', 'provisioning', 'error'],
+  provisioning: ['provisioning', 'starting', 'error'],
+  starting: ['starting', 'healthy', 'error'],
+  healthy: ['healthy', 'stopped', 'restarting', 'error'],
+  stopped: ['stopped', 'configuring', 'idle', 'error', 'starting'],
+  restarting: ['restarting', 'starting', 'healthy', 'error'],
+  error: ['error', 'configuring', 'idle', 'restarting', 'stopped'],
+};
+
+DeploymentSchema.methods.transitionTo = async function (
+  newStatus: DeploymentStatus,
+  options?: { errorMessage?: string; provisioningStep?: string }
+): Promise<void> {
+  const currentStatus = this.status as DeploymentStatus;
+  const validTransitions = VALID_STATE_TRANSITIONS[currentStatus];
+
+  if (!validTransitions || !validTransitions.includes(newStatus)) {
+    if (newStatus !== 'error' && newStatus !== 'idle') {
+      throw new Error(`Invalid state transition from ${currentStatus} to ${newStatus}`);
+    }
+  }
+
+  this.status = newStatus;
+
+  if (options?.errorMessage) this.errorMessage = options.errorMessage;
+  if (options?.provisioningStep !== undefined) this.provisioningStep = options.provisioningStep;
+
+  if (newStatus === 'healthy') {
+    this.errorMessage = undefined;
+    this.lastHeartbeat = new Date();
+    this.lastRequestAt = new Date(); // Initialize lastRequestAt when agent goes healthy
+  }
+
+  await this.save();
+};
+
+DeploymentSchema.methods.getUrl = function (): string {
+  const domain = process.env.DOMAIN || 'localhost';
+  const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+
+  if (process.env.NODE_ENV === 'development' && this.internalPort) {
+    return `http://localhost:${this.internalPort}`;
+  }
+
+  return `${protocol}://${this.subdomain}.${domain}`;
+};
+
+DeploymentSchema.methods.getAutoLoginUrl = async function (): Promise<string> {
+  const secrets = await this.decryptSecrets();
+  const baseUrl = this.getUrl();
+  return `${baseUrl}?token=${secrets.webUiToken}`;
+};
+
+interface IDeploymentModel extends Model<IDeploymentDocument> {
+  findBySubdomain(subdomain: string): Promise<IDeploymentDocument | null>;
+}
+
+DeploymentSchema.statics.findBySubdomain = function (subdomain: string) {
+  return this.findOne({ subdomain: subdomain.toLowerCase() });
+};
+
+export const Deployment = model<IDeploymentDocument, IDeploymentModel>('Deployment', DeploymentSchema);
+export default Deployment;
