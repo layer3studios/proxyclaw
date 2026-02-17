@@ -36,7 +36,7 @@ const defaultDockerSocket = (() => {
 
 // Multi-currency pricing — amount in smallest unit (cents/paise)
 export const CURRENCY_PRICING: Record<string, { amount: number; currency: string }> = {
-  INR: { amount: 84900,  currency: 'INR' },    // ₹849
+  INR: { amount: 99900,  currency: 'INR' },    // ₹849
   USD: { amount: 1000,   currency: 'USD' },    // $10
   EUR: { amount: 900,    currency: 'EUR' },    // €9
   GBP: { amount: 800,    currency: 'GBP' },    // £8
