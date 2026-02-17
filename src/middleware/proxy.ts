@@ -90,6 +90,7 @@ class ProxyManager {
     res: Response,
     next: NextFunction
   ): Promise<void> => {
+    if (req.originalUrl.startsWith('/api')) return next();
     const host = req.headers.host || '';
     const subdomain = this.extractSubdomain(host);
 
