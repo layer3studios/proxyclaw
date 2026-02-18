@@ -14,6 +14,7 @@ import routes from '@routes/index';
 import { reaperService } from '@services/ReaperService'; // <--- 1. IMPORT REAPER
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 // --- MIDDLEWARE ---
