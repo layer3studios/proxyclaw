@@ -29,16 +29,22 @@ export class ConfigBuilder {
     model: string,
     resourceLimits?: ResourceLimits
   ): ContainerConfig {
-    const env = this.buildEnvironmentVariables(deploymentId, secrets, model);
-    const binds = this.buildVolumeMounts(deploymentId);
-
     const cpuLimit = resourceLimits?.cpuLimit ?? AGENT.CPU_LIMIT;
     const memoryLimit = resourceLimits?.memoryLimit ?? AGENT.MEMORY_LIMIT;
+
+    const env = this.buildEnvironmentVariables(deploymentId, secrets, model, memoryLimit);
+    const binds = this.buildVolumeMounts(deploymentId);
 
     const hostConfig = this.buildHostConfig(hostPort, binds, cpuLimit, memoryLimit);
 
     logger.debug('Building container config', {
-      containerName, hostPort, deploymentId, model, cpuLimit, memoryLimit,
+      containerName,
+      hostPort,
+      deploymentId,
+      model,
+      cpuLimit,
+      memoryLimit,
+      nodeOptions: env.find((e) => e.startsWith('NODE_OPTIONS=')),
     });
 
     return {
@@ -51,15 +57,41 @@ export class ConfigBuilder {
     };
   }
 
-  private buildEnvironmentVariables(deploymentId: string, secrets: IDecryptedSecrets, model: string): string[] {
+  /**
+   * Compute a safe Node.js heap size from container memory limit.
+   * - Convert bytes -> MB
+   * - Allocate ~75% to V8 heap (headroom for native, buffers, code space, etc.)
+   * - Minimum 256MB
+   * - Small extra safety: subtract 64MB before applying ratio (optional)
+   */
+  private computeNodeHeapMb(memoryLimitBytes: number): number {
+    const memoryLimitMb = Math.max(0, Math.floor(memoryLimitBytes / (1024 * 1024)));
+
+    // If memoryLimit wasn't set (0), fall back to a sane default
+    if (!memoryLimitMb) return 512;
+
+    const headroomMb = Math.max(0, memoryLimitMb - 64);
+    const heapMb = Math.floor(headroomMb * 0.75);
+
+    return Math.max(256, heapMb);
+  }
+
+  private buildEnvironmentVariables(
+    deploymentId: string,
+    secrets: IDecryptedSecrets,
+    model: string,
+    memoryLimitBytes: number
+  ): string[] {
     const safeToken = secrets.webUiToken || DEFAULTS.FALLBACK_TOKEN;
+
+    const heapMb = this.computeNodeHeapMb(memoryLimitBytes);
 
     const env = [
       `OPENCLAW_CONFIG_PATH=/config/openclaw.json`,
       `DEPLOYMENT_ID=${deploymentId}`,
       `NODE_ENV=production`,
       `OPENCLAW_GATEWAY_TOKEN=${safeToken}`,
-      `NODE_OPTIONS=--max-old-space-size=512`,
+      `NODE_OPTIONS=--max-old-space-size=${heapMb}`,
     ];
 
     if (secrets.googleApiKey) {
@@ -83,7 +115,12 @@ export class ConfigBuilder {
     ];
   }
 
-  private buildHostConfig(hostPort: number, binds: string[], cpuLimit: number, memoryLimit: number): ContainerConfig['HostConfig'] {
+  private buildHostConfig(
+    hostPort: number,
+    binds: string[],
+    cpuLimit: number,
+    memoryLimit: number
+  ): ContainerConfig['HostConfig'] {
     return {
       Binds: binds,
       PortBindings: { [`${AGENT.INTERNAL_PORT}/tcp`]: [{ HostPort: hostPort.toString() }] },
