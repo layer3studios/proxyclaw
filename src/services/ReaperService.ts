@@ -74,16 +74,25 @@ export class ReaperService {
   // 2) Hibernate idle agents (idle > X minutes)
   // =========================================================================
   private async hibernateIdleAgents() {
-    const cutoff = new Date(Date.now() - config.capacity.idleTimeoutMinutes * 60 * 1000);
+ const now = Date.now();
+const cutoff = new Date(now - config.capacity.idleTimeoutMinutes * 60 * 1000);
 
-    const idleDeployments = await Deployment.find({
-      status: 'healthy',
-      containerId: { $exists: true, $ne: null },
-      $or: [
-        { lastRequestAt: { $lt: cutoff } },
-        { lastRequestAt: { $exists: false } },
-      ],
-    }).exec();
+// Grace period for brand-new deployments with no traffic yet
+const graceMinutes = Number(process.env.IDLE_STARTUP_GRACE_MINUTES ?? 10);
+const graceCutoff = new Date(now - graceMinutes * 60 * 1000);
+
+const idleDeployments = await Deployment.find({
+  status: 'healthy',
+  containerId: { $exists: true, $ne: null },
+  $or: [
+    // normal idle: had traffic, now idle
+    { lastRequestAt: { $lt: cutoff } },
+
+    // no traffic ever: only consider idle if it's older than grace window
+    { lastRequestAt: { $exists: false }, createdAt: { $lt: graceCutoff } },
+  ],
+}).exec();
+
 
     for (const deployment of idleDeployments) {
       try {
