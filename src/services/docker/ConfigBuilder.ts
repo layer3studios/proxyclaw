@@ -11,11 +11,24 @@ import { logger } from '@utils/logger';
 
 export interface ResourceLimits {
   cpuLimit: number;
-  memoryLimit: number;
+  memoryLimit: number; // bytes
 }
 
 export class ConfigBuilder {
   private readonly dataPath: string;
+
+  // Hard cap for V8 old-space heap (per agent) in MB
+  private static readonly MAX_NODE_HEAP_MB = 1536; // 1.5GB
+
+  // Leave headroom for native memory (buffers, code space, mmap, jemalloc, etc.)
+  // 128MB is a reasonable baseline; increase if you see container OOMKilled.
+  private static readonly NON_HEAP_HEADROOM_MB = 128;
+
+  // Percentage of remaining memory we allow for V8 heap
+  private static readonly HEAP_RATIO = 0.75;
+
+  // Round heap down to reduce fragmentation / keep stable
+  private static readonly HEAP_ROUND_MB = 64;
 
   constructor() {
     this.dataPath = path.resolve(process.cwd(), DOCKER.DATA_PATH);
@@ -59,21 +72,37 @@ export class ConfigBuilder {
 
   /**
    * Compute a safe Node.js heap size from container memory limit.
-   * - Convert bytes -> MB
-   * - Allocate ~75% to V8 heap (headroom for native, buffers, code space, etc.)
-   * - Minimum 256MB
-   * - Small extra safety: subtract 64MB before applying ratio (optional)
+   *
+   * - If Docker memory limit is set: heap = floor((mem - headroom) * ratio)
+   * - If Docker memory limit is not set (0): heap = cap (1.5GB) (still dynamic usage; only a max)
+   * - Always clamp to [256MB .. 1536MB]
+   * - Always ensure heap never exceeds (mem - headroom)
    */
   private computeNodeHeapMb(memoryLimitBytes: number): number {
-    const memoryLimitMb = Math.max(0, Math.floor(memoryLimitBytes / (1024 * 1024)));
+    const memMb = Math.max(0, Math.floor(memoryLimitBytes / (1024 * 1024)));
 
-    // If memoryLimit wasn't set (0), fall back to a sane default
-    if (!memoryLimitMb) return 512;
+    // No container memory limit -> still cap heap to 1.5GB
+    if (!memMb) return ConfigBuilder.MAX_NODE_HEAP_MB;
 
-    const headroomMb = Math.max(0, memoryLimitMb - 64);
-    const heapMb = Math.floor(headroomMb * 0.75);
+    const usableMb = Math.max(0, memMb - ConfigBuilder.NON_HEAP_HEADROOM_MB);
+    let heapMb = Math.floor(usableMb * ConfigBuilder.HEAP_RATIO);
 
-    return Math.max(256, heapMb);
+    // Never exceed what the container can actually support
+    heapMb = Math.min(heapMb, usableMb);
+
+    // Hard cap to 1.5GB
+    heapMb = Math.min(heapMb, ConfigBuilder.MAX_NODE_HEAP_MB);
+
+    // Round down to 64MB blocks
+    heapMb = Math.floor(heapMb / ConfigBuilder.HEAP_ROUND_MB) * ConfigBuilder.HEAP_ROUND_MB;
+
+    // Minimum safety
+    heapMb = Math.max(256, heapMb);
+
+    // Final safety: if container is tiny, don’t set heap bigger than usable
+    heapMb = Math.min(heapMb, Math.max(256, usableMb));
+
+    return heapMb;
   }
 
   private buildEnvironmentVariables(
@@ -86,7 +115,7 @@ export class ConfigBuilder {
 
     const heapMb = this.computeNodeHeapMb(memoryLimitBytes);
 
-    const env = [
+    const env: string[] = [
       `OPENCLAW_CONFIG_PATH=/config/openclaw.json`,
       `DEPLOYMENT_ID=${deploymentId}`,
       `NODE_ENV=production`,
