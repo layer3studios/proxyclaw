@@ -40,6 +40,7 @@ const DeploymentSchema = new Schema<IDeploymentDocument>(
     },
     lastHeartbeat: { type: Date },
     lastRequestAt: { type: Date },        // <-- Tracks last proxy traffic for idle auto-stop
+    lastWokeAt: { type: Date },           // <-- Tracks when agent was last woken from hibernation
     errorMessage: { type: String },
     provisioningStep: { type: String, default: '' },
   },

@@ -15,9 +15,9 @@ const isWindows = process.platform === 'win32';
 // this prevents Windows from trying /var/run/docker.sock.
 const resolvedDockerSocket =
   config?.docker?.socketPath &&
-  typeof config.docker.socketPath === 'string' &&
-  config.docker.socketPath.trim().length > 0 &&
-  !(isWindows && config.docker.socketPath.includes('/var/run/docker.sock'))
+    typeof config.docker.socketPath === 'string' &&
+    config.docker.socketPath.trim().length > 0 &&
+    !(isWindows && config.docker.socketPath.includes('/var/run/docker.sock'))
     ? config.docker.socketPath
     : isWindows
       ? 'http://127.0.0.1:2375'
@@ -26,20 +26,20 @@ const resolvedDockerSocket =
 // Ensure GHCR is used by default (avoids pulling from Docker Hub by mistake)
 const resolvedAgentImage =
   config?.docker?.agentImage &&
-  typeof config.docker.agentImage === 'string' &&
-  config.docker.agentImage.trim().length > 0
+    typeof config.docker.agentImage === 'string' &&
+    config.docker.agentImage.trim().length > 0
     ? config.docker.agentImage
     : 'ghcr.io/openclaw/openclaw:latest';
 
 // Data path fallback (Windows-friendly)
 const resolvedDataPath =
   config?.docker?.dataPath &&
-  typeof config.docker.dataPath === 'string' &&
-  config.docker.dataPath.trim().length > 0
+    typeof config.docker.dataPath === 'string' &&
+    config.docker.dataPath.trim().length > 0
     ? config.docker.dataPath
     : isWindows
-      ? 'C:\\simpleclaw-data'
-      : '/tmp/simpleclaw-data';
+      ? 'C:\\proxyclaw-data'
+      : '/tmp/proxyclaw-data';
 
 export const DOCKER = {
   AGENT_IMAGE: resolvedAgentImage,

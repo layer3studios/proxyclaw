@@ -8,20 +8,20 @@ router.get('/domain-check', async (req, res) => {
   const domain = req.query.domain as string;
   if (!domain) return res.sendStatus(400);
 
-  // Logic: extracting 'alice-agent' from 'alice-agent.simpleclaw.com'
+  // Logic: extracting 'alice-agent' from 'alice-agent.proxyclaw.xyz'
   // NOTE: In production, ensure this logic matches your domain structure exactly.
-  const subdomain = domain.split('.')[0]; 
+  const subdomain = domain.split('.')[0];
 
   try {
     const exists = await Deployment.exists({ subdomain: subdomain.toLowerCase() });
     if (exists) {
-      return res.sendStatus(200); 
+      return res.sendStatus(200);
     }
   } catch (e) {
     // database error
     return res.sendStatus(500);
   }
-  
+
   return res.sendStatus(404);
 });
 

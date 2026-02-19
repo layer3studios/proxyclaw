@@ -50,6 +50,12 @@ export class DeploymentOrchestrator {
 
     logger.info('Starting agent deployment', { deploymentId, subdomain, resourceLimits });
 
+    // ── Update timestamps so Reaper doesn't kill us while spawning ──
+    const now = new Date();
+    deployment.lastRequestAt = now;
+    (deployment as any).lastWokeAt = now;
+    await deployment.save();
+
     // ── MAX_RUNNING_AGENTS CHECK ──
     const maxRunning = config.capacity.maxRunningAgents;
     const currentRunning = await this.getRunningAgentCount();

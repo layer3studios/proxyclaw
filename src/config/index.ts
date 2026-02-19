@@ -27,7 +27,7 @@ const isRunningInDocker =
   fs.existsSync('/.dockerenv') ||
   fs.existsSync('/run/.containerenv');
 
-const defaultDataPath = isWindows ? 'C:\\\\simpleclaw-data' : '/opt/saas/data';
+const defaultDataPath = isWindows ? 'C:\\\\proxyclaw-data' : '/opt/saas/data';
 const defaultDockerSocket = (() => {
   if (isWindows) return 'http://127.0.0.1:2375';
   if (isRunningInDocker) return 'http://host.docker.internal:2375';
@@ -36,16 +36,16 @@ const defaultDockerSocket = (() => {
 
 // Multi-currency pricing — amount in smallest unit (cents/paise)
 export const CURRENCY_PRICING: Record<string, { amount: number; currency: string }> = {
-  INR: { amount: 99900,  currency: 'INR' },    // ₹849
-  USD: { amount: 1000,   currency: 'USD' },    // $10
-  EUR: { amount: 900,    currency: 'EUR' },    // €9
-  GBP: { amount: 800,    currency: 'GBP' },    // £8
-  CAD: { amount: 1400,   currency: 'CAD' },    // C$14
-  AUD: { amount: 1500,   currency: 'AUD' },    // A$15
-  SGD: { amount: 1300,   currency: 'SGD' },    // S$13
-  AED: { amount: 3700,   currency: 'AED' },    // AED 37
-  JPY: { amount: 1500,   currency: 'JPY' },    // ¥1500
-  MYR: { amount: 4500,   currency: 'MYR' },    // RM45
+  INR: { amount: 99900, currency: 'INR' },    // ₹849
+  USD: { amount: 1000, currency: 'USD' },    // $10
+  EUR: { amount: 900, currency: 'EUR' },    // €9
+  GBP: { amount: 800, currency: 'GBP' },    // £8
+  CAD: { amount: 1400, currency: 'CAD' },    // C$14
+  AUD: { amount: 1500, currency: 'AUD' },    // A$15
+  SGD: { amount: 1300, currency: 'SGD' },    // S$13
+  AED: { amount: 3700, currency: 'AED' },    // AED 37
+  JPY: { amount: 1500, currency: 'JPY' },    // ¥1500
+  MYR: { amount: 4500, currency: 'MYR' },    // RM45
 };
 
 export const DEFAULT_CURRENCY = 'USD';
@@ -78,7 +78,7 @@ export const config = {
     socketPath: getEnv('DOCKER_SOCKET', defaultDockerSocket),
     agentImage: getEnv('AGENT_IMAGE', 'ghcr.io/openclaw/openclaw:latest'),
     dataPath: getEnv('DATA_PATH', defaultDataPath),
-    containerPrefix: getEnv('CONTAINER_PREFIX', 'simpleclaw-agent-'),
+    containerPrefix: getEnv('CONTAINER_PREFIX', 'proxyclaw-agent-'),
   },
   ports: {
     min: getIntEnv('MIN_AGENT_PORT', 20000),
@@ -113,11 +113,11 @@ export const config = {
     port: getIntEnv('SMTP_PORT', 587),
     user: getEnv('SMTP_USER', ''),
     pass: getEnv('SMTP_PASS', ''),
-    from: getEnv('SMTP_FROM', 'SimpleClaw <noreply@simpleclaw.com>'),
+    from: getEnv('SMTP_FROM', 'ProxyClaw <noreply@proxyclaw.xyz>'),
   },
 
   capacity: {
-    maxSignups: getIntEnv('MAX_SIGNUPS', 50),
+    maxDeployments: getIntEnv('MAX_DEPLOYMENTS', 50),
     maxRunningAgents: getIntEnv('MAX_RUNNING_AGENTS', 6),
     idleTimeoutMinutes: getIntEnv('IDLE_TIMEOUT_MINUTES', 10),
   },

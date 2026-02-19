@@ -6,12 +6,16 @@
  *
  * IDLE TRACKING: Touches `lastRequestAt` on every proxied request
  * (throttled to once per 60s per subdomain to reduce DB writes).
+ *
+ * AUTO-WAKE: If a deployment is stopped/error and receives an HTTP request,
+ * the proxy auto-wakes the agent and forwards the request once healthy.
  */
 
 import httpProxy from 'http-proxy';
 import { Request, Response, NextFunction } from 'express';
 import { IncomingMessage } from 'http';
 import { Deployment } from '@models/Deployment';
+import { deploymentOrchestrator } from '@services/deployment';
 import { logger } from '@utils/logger';
 import { config } from '@config/index';
 import { Socket } from 'net';
@@ -23,6 +27,8 @@ import { Socket } from 'net';
 const PROXY_TIMEOUT = 30000;
 const CACHE_TTL = 5000;
 const TOUCH_THROTTLE_MS = 60_000; // Only update lastRequestAt once per 60s per subdomain
+const WAKE_TIMEOUT_MS = 60_000;   // Max time to wait for agent to wake up
+const WAKE_POLL_INTERVAL_MS = 2000; // Poll interval while waiting for wake
 
 // ============================================================================
 // Types
@@ -44,6 +50,9 @@ class ProxyManager {
 
   // Throttle map: subdomain → last touch timestamp
   private lastTouchMap: Map<string, number> = new Map();
+
+  // Track in-progress wake operations to prevent duplicate wakes
+  private wakeInProgress: Map<string, Promise<boolean>> = new Map();
 
   constructor() {
     this.proxy = httpProxy.createProxyServer({
@@ -82,6 +91,80 @@ class ProxyManager {
   }
 
   // ==========================================================================
+  // Auto-Wake Logic
+  // ==========================================================================
+
+  /**
+   * Attempt to wake a stopped/error deployment.
+   * Deduplicates concurrent wake calls for the same subdomain.
+   * Returns true if deployment became healthy, false otherwise.
+   */
+  private async wakeDeployment(subdomain: string): Promise<boolean> {
+    // If a wake is already in progress for this subdomain, join it
+    const existing = this.wakeInProgress.get(subdomain);
+    if (existing) return existing;
+
+    const wakePromise = this.doWakeDeployment(subdomain);
+    this.wakeInProgress.set(subdomain, wakePromise);
+
+    try {
+      return await wakePromise;
+    } finally {
+      this.wakeInProgress.delete(subdomain);
+    }
+  }
+
+  private async doWakeDeployment(subdomain: string): Promise<boolean> {
+    try {
+      const deployment = await Deployment.findBySubdomain(subdomain);
+      if (!deployment) return false;
+
+      // Only auto-wake stopped or error deployments
+      if (deployment.status !== 'stopped' && deployment.status !== 'error') {
+        return false;
+      }
+
+      logger.info('Auto-waking deployment', { subdomain, previousStatus: deployment.status });
+
+      // Decrypt secrets and spawn agent (same path as website "Start" button)
+      const secrets = await deployment.decryptSecrets();
+      await deploymentOrchestrator.spawnAgent(
+        deployment as any,
+        secrets,
+        deployment.config?.model as string,
+        { cpuLimit: config.agent.cpuLimit, memoryLimit: config.agent.memoryLimit }
+      );
+
+      // Poll until healthy or timeout
+      const deadline = Date.now() + WAKE_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await this.delay(WAKE_POLL_INTERVAL_MS);
+        const fresh = await Deployment.findBySubdomain(subdomain);
+        if (fresh && fresh.status === 'healthy' && fresh.internalPort) {
+          // Clear proxy cache so next lookup gets fresh port
+          this.clearCache(subdomain);
+          logger.info('Auto-wake successful', { subdomain });
+          return true;
+        }
+        if (fresh && fresh.status === 'error') {
+          logger.warn('Auto-wake failed — deployment errored', { subdomain });
+          return false;
+        }
+      }
+
+      logger.warn('Auto-wake timed out', { subdomain });
+      return false;
+    } catch (error) {
+      logger.error('Auto-wake error', { subdomain, error: (error as Error).message });
+      return false;
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // ==========================================================================
   // Middleware
   // ==========================================================================
 
@@ -111,6 +194,30 @@ class ProxyManager {
       }
 
       if (deployment.status !== 'healthy') {
+        // Auto-wake: attempt to start stopped/error deployments
+        if (deployment.status === 'stopped' || deployment.status === 'error') {
+          logger.info('Attempting auto-wake for request', { subdomain, method: req.method, path: req.path });
+          const woke = await this.wakeDeployment(subdomain);
+          if (woke) {
+            // Re-fetch deployment to get updated port
+            const freshDeployment = await this.getDeployment(subdomain);
+            if (freshDeployment && freshDeployment.status === 'healthy') {
+              this.touchLastRequest(subdomain);
+              this.proxyRequest(req, res, freshDeployment.port, subdomain);
+              return;
+            }
+          }
+          // Wake failed or timed out
+          res.status(503).json({
+            success: false,
+            error: {
+              code: 'AGENT_WAKING',
+              message: 'Agent is waking up but not ready yet. Please retry in a moment.',
+            },
+          });
+          return;
+        }
+
         return this.handleNonHealthyDeployment(res, deployment);
       }
 
@@ -198,7 +305,18 @@ class ProxyManager {
     }
 
     const deployment = await Deployment.findBySubdomain(subdomain);
-    if (!deployment || !deployment.internalPort) return null;
+    if (!deployment || !deployment.internalPort) {
+      // Still cache the status so auto-wake can detect stopped deployments
+      if (deployment && !deployment.internalPort) {
+        this.deploymentCache.set(subdomain, {
+          port: 0,
+          status: deployment.status,
+          timestamp: Date.now(),
+        });
+        return { port: 0, status: deployment.status };
+      }
+      return null;
+    }
 
     this.deploymentCache.set(subdomain, {
       port: deployment.internalPort,
@@ -296,3 +414,4 @@ export const proxyMiddleware = proxyManager.middleware;
 export const handleWebSocketUpgrade = proxyManager.handleUpgrade;
 
 export default proxyManager;
+

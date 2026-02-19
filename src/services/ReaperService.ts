@@ -74,24 +74,39 @@ export class ReaperService {
   // 2) Hibernate idle agents (idle > X minutes)
   // =========================================================================
   private async hibernateIdleAgents() {
- const now = Date.now();
-const cutoff = new Date(now - config.capacity.idleTimeoutMinutes * 60 * 1000);
+    const now = Date.now();
+    const cutoff = new Date(now - config.capacity.idleTimeoutMinutes * 60 * 1000);
 
-// Grace period for brand-new deployments with no traffic yet
-const graceMinutes = Number(process.env.IDLE_STARTUP_GRACE_MINUTES ?? 10);
-const graceCutoff = new Date(now - graceMinutes * 60 * 1000);
+    // Grace period for brand-new deployments with no traffic yet
+    const graceMinutes = Number(process.env.IDLE_STARTUP_GRACE_MINUTES ?? 10);
+    const graceCutoff = new Date(now - graceMinutes * 60 * 1000);
 
-const idleDeployments = await Deployment.find({
-  status: 'healthy',
-  containerId: { $exists: true, $ne: null },
-  $or: [
-    // normal idle: had traffic, now idle
-    { lastRequestAt: { $lt: cutoff } },
+    // Wake grace window — don't hibernate agents that were just woken
+    const wakeGraceMinutes = Number(process.env.WAKE_GRACE_MINUTES ?? 2);
+    const wakeGraceCutoff = new Date(now - wakeGraceMinutes * 60 * 1000);
 
-    // no traffic ever: only consider idle if it's older than grace window
-    { lastRequestAt: { $exists: false }, createdAt: { $lt: graceCutoff } },
-  ],
-}).exec();
+    const idleDeployments = await Deployment.find({
+      status: 'healthy',
+      containerId: { $exists: true, $ne: null },
+      // Exclude recently woken deployments
+      $and: [
+        {
+          $or: [
+            { lastWokeAt: { $exists: false } },
+            { lastWokeAt: { $lt: wakeGraceCutoff } },
+          ],
+        },
+        {
+          $or: [
+            // normal idle: had traffic, now idle
+            { lastRequestAt: { $lt: cutoff } },
+
+            // no traffic ever: only consider idle if it's older than grace window
+            { lastRequestAt: { $exists: false }, createdAt: { $lt: graceCutoff } },
+          ],
+        },
+      ],
+    }).exec();
 
 
     for (const deployment of idleDeployments) {
@@ -102,11 +117,11 @@ const idleDeployments = await Deployment.find({
           try {
             const { dockerClient } = await import('@services/docker/DockerClient');
             await dockerClient.stopContainer(deployment.containerId, 15);
-          } catch {}
+          } catch { }
           try {
             const { dockerClient } = await import('@services/docker/DockerClient');
             await dockerClient.removeContainer(deployment.containerId, true);
-          } catch {}
+          } catch { }
         }
 
         await Deployment.updateOne(
@@ -154,14 +169,14 @@ const idleDeployments = await Deployment.find({
           try {
             if (deployment.containerId) {
               const { dockerClient } = await import('@services/docker/DockerClient');
-              try { await dockerClient.stopContainer(deployment.containerId, 15); } catch {}
-              try { await dockerClient.removeContainer(deployment.containerId, true); } catch {}
+              try { await dockerClient.stopContainer(deployment.containerId, 15); } catch { }
+              try { await dockerClient.removeContainer(deployment.containerId, true); } catch { }
             }
             await Deployment.updateOne(
               { _id: deployment._id },
               { $set: { status: 'stopped', errorMessage: 'Subscription expired' }, $unset: { containerId: '', internalPort: '' } }
             );
-          } catch {}
+          } catch { }
         }
       }
     } catch (error) {

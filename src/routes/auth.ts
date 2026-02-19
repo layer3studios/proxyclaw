@@ -42,18 +42,6 @@ router.post("/register", validateBody(registerSchema), async (req, res, next) =>
   try {
     const { email, password } = req.body;
 
-    const maxSignups = config.capacity.maxSignups;
-    const currentUsers = await User.countDocuments();
-    if (currentUsers >= maxSignups) {
-      res
-        .status(403)
-        .json({
-          success: false,
-          error: { code: "SIGNUPS_CLOSED", message: `All ${maxSignups} seats are taken!` },
-        } as ApiResponse);
-      return;
-    }
-
     if (await User.findByEmail(email)) {
       res
         .status(409)
@@ -169,17 +157,6 @@ router.post("/google", validateBody(googleAuthSchema), async (req, res) => {
         user.authProvider = "google";
         await user.save();
       } else {
-        // Capacity gate
-        const maxSignups = config.capacity.maxSignups;
-        const currentUsers = await User.countDocuments();
-        if (currentUsers >= maxSignups) {
-          res.status(403).json({
-            success: false,
-            error: { code: "SIGNUPS_CLOSED", message: `All ${maxSignups} seats are taken!` },
-          } as ApiResponse);
-          return;
-        }
-
         // Create new user
         user = new User({
           email,

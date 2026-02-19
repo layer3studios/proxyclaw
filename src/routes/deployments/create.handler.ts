@@ -32,6 +32,13 @@ export async function createDeployment(req: Request, res: Response, next: NextFu
     const canCreate = await user.canCreateAgent();
     if (!canCreate.allowed) throw new ForbiddenError(canCreate.reason || 'Cannot create deployment');
 
+    // GLOBAL DEPLOYMENT CAPACITY GATE
+    const maxDeployments = config.capacity.maxDeployments;
+    const totalDeployments = await Deployment.countDocuments({});
+    if (totalDeployments >= maxDeployments) {
+      throw new ForbiddenError(`All ${maxDeployments} deployment slots are taken. No new deployments can be created.`);
+    }
+
     // Validate
     const subdomain = sanitizeSubdomain(name);
     const existing = await Deployment.findOne({ subdomain });

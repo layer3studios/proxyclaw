@@ -34,7 +34,7 @@ const prodFormat = combine(
 const loggerConfig: winston.LoggerOptions = {
   level: config.logging.level,
   defaultMeta: {
-    service: 'simpleclaw-saas',
+    service: 'proxyclaw-saas',
     environment: config.server.env,
   },
   transports: [
@@ -42,10 +42,10 @@ const loggerConfig: winston.LoggerOptions = {
     new winston.transports.Console({
       format: config.server.isDevelopment
         ? combine(
-            colorize(),
-            timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-            devFormat
-          )
+          colorize(),
+          timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+          devFormat
+        )
         : prodFormat,
     }),
   ],

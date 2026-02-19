@@ -67,6 +67,7 @@ export interface IDeployment {
   config?: Record<string, unknown>;
   lastHeartbeat?: Date;
   lastRequestAt?: Date;
+  lastWokeAt?: Date;
   errorMessage?: string;
   provisioningStep?: string;
   createdAt: Date;
