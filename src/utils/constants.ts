@@ -141,10 +141,7 @@ export const ENCRYPTED_FIELDS = [
 // ============================================================================
 
 export const MODEL_MAPPINGS: Record<string, string> = {
-  'google/gemini-1.5-flash': 'google/gemini-3-pro-preview',
-  'google/gemini-1.5-pro': 'google/gemini-3-pro-preview',
-  'google/gemini-2.0-flash-exp': 'google/gemini-3-pro-preview',
-  'google/gemini-flash': 'google/gemini-3-pro-preview',
+  'google/gemini-flash': 'google/gemini-2.5-flash',
 } as const;
 
 // ============================================================================

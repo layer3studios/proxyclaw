@@ -62,7 +62,7 @@ export function isValidPort(port: number, min: number, max: number): boolean {
  * Validate Google API key format
  */
 export function isValidGoogleApiKey(key: string): boolean {
-  return /^AIza[0-9A-Za-z\-_]{35}$/.test(key);
+  return /^AIza[0-9A-Za-z\-_]{30,}$/.test(key);
 }
 
 /**
@@ -109,7 +109,7 @@ export function validateAndNormalizeModel(
 
   // Auto-select model if not provided
   if (!normalizedModel) {
-    if (secrets.googleApiKey) return 'google/gemini-3-pro-preview';
+    if (secrets.googleApiKey) return 'google/gemini-2.5-flash';
     if (secrets.anthropicApiKey) return 'anthropic/claude-3-5-sonnet';
     if (secrets.openaiApiKey) return 'openai/gpt-4o';
     throw new ValidationError('No model specified and no API keys provided');
